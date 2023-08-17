@@ -32,9 +32,7 @@ def _task_downstream_task_ids(operator: "Operator") -> Set[str]:
 
 class AirflowGenerator:
     @staticmethod
-    def _get_dependencies(
-        task: "Operator", dag: "DAG", flow_urn: DataFlowUrn
-    ) -> List[DataJobUrn]:
+    def _get_dependencies(task: "Operator", dag: "DAG", flow_urn: DataFlowUrn) -> List[DataJobUrn]:
         from datahub_provider._airflow_shims import ExternalTaskSensor
 
         # resolve URNs for upstream nodes in subdags upstream of the current task.
@@ -50,9 +48,7 @@ class AirflowGenerator:
 
             # else, link the leaf tasks of the upstream subdag as upstream tasks
             for upstream_subdag_task_id in upstream_subdag.task_dict:
-                upstream_subdag_task = upstream_subdag.task_dict[
-                    upstream_subdag_task_id
-                ]
+                upstream_subdag_task = upstream_subdag.task_dict[upstream_subdag_task_id]
 
                 upstream_subdag_task_urn = DataJobUrn.create_from_ids(
                     job_id=upstream_subdag_task_id, data_flow_urn=str(flow_urn)
@@ -68,18 +64,10 @@ class AirflowGenerator:
 
         # subdags are always named with 'parent.child' style or Airflow won't run them
         # add connection from subdag trigger(s) if subdag task has no upstreams
-        if (
-            dag.is_subdag
-            and dag.parent_dag is not None
-            and len(task.upstream_task_ids) == 0
-        ):
+        if dag.is_subdag and dag.parent_dag is not None and len(task.upstream_task_ids) == 0:
             # filter through the parent dag's tasks and find the subdag trigger(s)
-            subdags = [
-                x for x in dag.parent_dag.task_dict.values() if x.subdag is not None
-            ]
-            matched_subdags = [
-                x for x in subdags if x.subdag and x.subdag.dag_id == dag.dag_id
-            ]
+            subdags = [x for x in dag.parent_dag.task_dict.values() if x.subdag is not None]
+            matched_subdags = [x for x in subdags if x.subdag and x.subdag.dag_id == dag.dag_id]
 
             # id of the task containing the subdag
             subdag_task_id = matched_subdags[0].task_id
@@ -145,9 +133,7 @@ class AirflowGenerator:
         id = dag.dag_id
         orchestrator = "airflow"
         description = f"{dag.description}\n\n{dag.doc_md or ''}"
-        data_flow = DataFlow(
-            env=cluster, id=id, orchestrator=orchestrator, description=description
-        )
+        data_flow = DataFlow(env=cluster, id=id, orchestrator=orchestrator, description=description)
 
         flow_property_bag: Dict[str, str] = {}
 
@@ -248,10 +234,15 @@ class AirflowGenerator:
             # In Airflow 2.4, _inlets and _outlets were removed in favor of non-private versions.
             "inlets",
             "outlets",
+            "xcom_return_value",
         ]
 
         for key in allowed_task_keys:
-            if hasattr(task, key):
+            if key == "xcom_return_value":
+                # Pull X-Com data down and add it to job_property_bag
+                xcom_value = task.xcom_pull(task_ids=task.task_id, key="return_value")
+                job_property_bag[key] = repr(xcom_value)
+            elif hasattr(task, key):
                 job_property_bag[key] = repr(getattr(task, key))
 
         datajob.properties = job_property_bag
@@ -266,9 +257,7 @@ class AirflowGenerator:
 
         if set_dependencies:
             datajob.upstream_urns.extend(
-                AirflowGenerator._get_dependencies(
-                    task=task, dag=dag, flow_urn=datajob.flow_urn
-                )
+                AirflowGenerator._get_dependencies(task=task, dag=dag, flow_urn=datajob.flow_urn)
             )
 
         return datajob
@@ -331,9 +320,7 @@ class AirflowGenerator:
         property_bag["external_trigger"] = str(dag_run.external_trigger)
         dpi.properties.update(property_bag)
 
-        dpi.emit_process_start(
-            emitter=emitter, start_timestamp_millis=start_timestamp_millis
-        )
+        dpi.emit_process_start(emitter=emitter, start_timestamp_millis=start_timestamp_millis)
 
     @staticmethod
     def complete_dataflow(
@@ -421,6 +408,7 @@ class AirflowGenerator:
         job_property_bag["priority_weight"] = str(ti.priority_weight)
         job_property_bag["unixname"] = str(ti.unixname)
         job_property_bag["log_url"] = ti.log_url
+        job_property_bag["xcom_return_value"] = str(ti.xcom_pull(task_ids=ti.task_id))
         dpi.properties.update(job_property_bag)
         dpi.url = ti.log_url
 
@@ -490,9 +478,7 @@ class AirflowGenerator:
             elif ti.state == "failed":
                 result = InstanceRunResult.FAILURE
             else:
-                raise Exception(
-                    f"Result should be either success or failure and it was {ti.state}"
-                )
+                raise Exception(f"Result should be either success or failure and it was {ti.state}")
 
         dpi = DataProcessInstance.from_datajob(
             datajob=datajob,
